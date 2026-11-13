@@ -1,58 +1,75 @@
 #!/usr/bin/env python3
-"""news-image-01 entry: copy the front-page image to /output/entry.png.
+"""news-image-01 entry: publish the newspaper image as the entry.
 
-The image (news.png) is a one-page newspaper front page summing up
-Friday 13 November 2026, rendered by render.py (PIL, deterministic).
-This program only copies the file the repository holds.
-
-Standard library only — no third-party imports — so it runs in a bare
-python:3.13 container.
+Copies news.png (rendered by render.py in this same repository) to
+/output/entry.png and proves the copy is exact: same bytes, same sha256,
+within the 1 MiB size cap and the 1024x1024 dimension cap. The PNG
+dimensions are read straight from the IHDR header with struct, so this
+runs in a bare python:3.13 image with no third-party packages at all.
 """
 import hashlib
 import os
 import shutil
 import struct
 
-SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "news.png")
-DST = "/output/entry.png"
-MAX_BYTES = 1024 * 1024
-MAX_DIM = 1024
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+HERE = os.path.dirname(os.path.abspath(__file__))
+CARD = os.path.join(HERE, "news.png")
+OUT = "/output/entry.png"
+MAGIC = b"\x89PNG\r\n\x1a\n"
+LIMIT_BYTES = 1024 * 1024
+LIMIT_SIDE = 1024
 
 
-def png_dimensions(data):
-    """Read (width, height) from the PNG IHDR chunk without any image lib."""
-    if len(data) < 24 or data[:8] != PNG_MAGIC:
-        raise SystemExit("entry.png is not a PNG file (bad magic)")
-    if data[12:16] != b"IHDR":
-        raise SystemExit("entry.png is not a PNG file (no IHDR chunk)")
+def fail(msg):
+    raise SystemExit(msg)
+
+
+def read_header(data):
+    """Return (width, height) from a PNG's IHDR chunk, or fail."""
+    if len(data) < 24 or data[:8] != MAGIC or data[12:16] != b"IHDR":
+        fail("news.png is not a valid PNG file")
     width, height = struct.unpack(">II", data[16:24])
     return width, height
 
 
-def main():
-    if not os.path.exists(SRC):
-        raise SystemExit("news.png not found next to main.py")
-    os.makedirs("/output", exist_ok=True)
-    shutil.copyfile(SRC, DST)
-    if not os.path.exists(DST):
-        raise SystemExit("copy failed: %s was not created" % DST)
-    with open(SRC, "rb") as f:
+def check_size(data):
+    if len(data) > LIMIT_BYTES:
+        fail("entry.png over the 1 MiB limit: %d bytes" % len(data))
+
+
+def check_sides(width, height):
+    if width > LIMIT_SIDE or height > LIMIT_SIDE:
+        fail("entry.png over the 1024x1024 limit: %dx%d"
+             % (width, height))
+    if width == 0 or height == 0:
+        fail("entry.png has a zero side: %dx%d" % (width, height))
+
+
+def check_match(src, dst):
+    if src != dst:
+        fail("copy mismatch: entry.png differs from news.png")
+
+
+def publish():
+    if not os.path.exists(CARD):
+        fail("news.png not found next to main.py")
+    with open(CARD, "rb") as f:
         src_data = f.read()
-    with open(DST, "rb") as f:
+    src_width, src_height = read_header(src_data)
+    check_size(src_data)
+    check_sides(src_width, src_height)
+    os.makedirs("/output", exist_ok=True)
+    shutil.copyfile(CARD, OUT)
+    if not os.path.isfile(OUT):
+        fail("copy failed: %s was not created" % OUT)
+    with open(OUT, "rb") as f:
         data = f.read()
-    if hashlib.sha256(data).hexdigest() != hashlib.sha256(src_data).hexdigest():
-        raise SystemExit("entry.png does not match news.png (copy failed)")
-    if len(data) > MAX_BYTES:
-        raise SystemExit("entry.png over the 1 MiB limit: %d bytes" % len(data))
-    width, height = png_dimensions(data)
-    if width > MAX_DIM or height > MAX_DIM:
-        raise SystemExit(
-            "entry.png over the 1024x1024 limit: %dx%d" % (width, height)
-        )
-    print("wrote", DST, len(data), "bytes,", (width, height), "sha256",
-          hashlib.sha256(data).hexdigest())
+    src_digest = hashlib.sha256(open(CARD, "rb").read()).hexdigest()
+    dst_digest = hashlib.sha256(data).hexdigest()
+    check_match(src_digest, dst_digest)
+    print("wrote %s %d bytes, (%d, %d) sha256 %s"
+          % (OUT, len(data), src_width, src_height, dst_digest))
 
 
 if __name__ == "__main__":
-    main()
+    publish()
